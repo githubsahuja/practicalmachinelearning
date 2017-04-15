@@ -1,0 +1,205 @@
+---
+title: 'Course 8: Practical Machine Learning - Prediction'
+author: "Sumeet Ahuja"
+date: "April 15, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE)
+```
+
+```{r message=FALSE, results='hide', echo=FALSE, warning=FALSE}
+# Load the libraries needed
+# Using readr for faster load of large data-set
+require(readr)
+require(caret)
+require(dplyr)
+require(knitr)
+require(ggplot2)
+```
+
+# Synopsis
+
+This report has been generated as part of Course Project for the Course 8 - Practical Machine Learning. Devices such as Jawbone Up, Nike FuelBand, and Fitbit have made it possible to collect data about personal activity relatively inexpensively. Six young health participants were asked to perform the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E)
+
+In this report we explore the data (from accelerometers on the belt, forearm, arm, and dumbell of 6 participants), build a prediction model, perform cross-validation and predict whether they did the exercise as per specification (Class A) or one of other ways. 
+
+From analysis performed we note that random forest prediction model has the best accuracy compared to boosting model and linear discriminant analysis for the data provided. We then utilize random forest prediction model to the test cases and predict the how the 20 test cases exercised.
+
+# Project Data & Objective
+
+The data for this project comes from the source: [Weight Lifting Exercise Dataset](http://groupware.les.inf.puc-rio.br/har). The data is collected from accelerometers on the belt, forearm, arm, and dumbell of 6 participants who were asked to perform barbell lifts correctly and incorrectly in 5 different ways. 
+
+The data-set for this project can be downloaded from the URL provided. The following code looks for the csv file in the working directory and downloads the file from the URL if the file is not found. The file is then loaded to be cleaned and analyzed as required by the project. 
+
+```{r message=FALSE, results='hide', echo=TRUE}
+
+#Check whether file exists in the working directory
+if (!file.exists("./Data/pml-training.csv") )
+	{
+		urlTrainingData <- 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv'
+		destTrainFile <- "./Data/pml-training.csv"
+		download.file(urlTrainingData, destTrainFile)
+	}
+
+#Check whether file exists in the working directory
+if (!file.exists("./Data/pml-testing.csv") )
+	{
+		urlTestingData <- 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv'
+		destTestFile <- "./Data/pml-testing.csv"
+		download.file(urlTestingData, destTestFile)
+}
+
+# Read in the data; using read_csv from library readr, for fast reading
+# As you investigate the data, you will notice that besides NA there are lot of blanks and "#DIV/0!"; 
+dfTrainingData <- read_csv("./Data/pml-training.csv")
+dfTestingData <- read_csv("./Data/pml-testing.csv")
+
+```
+
+# Data Processing
+
+As we analyze the data we notice that there are lot of columns (features) that don't have any values (NA's) these features will not impact our model creation and can be removed. For the sake of our model creation let's assume that any feature column that has more than 10% of its values as NA's can be removed. Also we notice that there are features like ID, time-stamp and window (initial seven columns) that should not have any effect on predicting the manner in which the participants exercised so these can be removed too. As a final step of cleanup we make sure that there are no missing values. 
+
+```{r message=FALSE, echo=TRUE}
+
+dim(dfTrainingData)
+
+# Remove the columns with more than 10% of NA's (blanks are treated as NA's - read_csv), 
+# as these columns don't add any value to our analysis
+dfTrainingDataClean <- dfTrainingData[,colMeans(is.na(dfTrainingData)) < 0.10]
+
+# Remove the first seven columns as they are not related to activity of the participants
+dfTrainingDataClean <- dfTrainingDataClean[, -(1:7)]
+
+# Only work with complete cases i.e. no missing values
+dfTrainingDataClean <- dfTrainingDataClean[complete.cases(dfTrainingDataClean),]
+
+dim(dfTrainingDataClean)
+```
+
+As we process and clean the data we are left with `r dim(dfTrainingDataClean)[2]` features compared to original data-set which had `r dim(dfTrainingData)[2]` features.
+
+Now we slice our training data-set into 2 sets - training (70%) and cross-validation test (30%), so that we can perform cross validation as we develop our prediction model. Once we have developed and evaluated our prediction model we apply that to the 20 test cases provided to predict the manner in which participants exercised. 
+
+```{r echo=TRUE}
+# Slice the data 70% training 30% to evaluate the model - cross validation
+intrain <- createDataPartition(dfTrainingDataClean$classe, p = 0.70, list=FALSE)
+training = dfTrainingDataClean[intrain,]
+testing = dfTrainingDataClean[-intrain,]
+
+# set seed for reproducibility
+set.seed(12345)
+
+# Dimension of training data-set
+dim(training)
+
+# Dimension of training data-set
+dim(testing)
+
+```
+
+# Building Prediction Model
+
+We build prediction model based on methods random forest (rf) and generalized boosted regression model (gbm). One of the reason for picking these 2 methods was that these algorithms are top performing algorithms in prediction contest. The other reason was to compare methods that deal with variance alone or variance and bias both. As part of model building we perform five-fold cross-validation for the random forest model using in built `trainControl` function available from caret package. We train our models for outcome (classe) with all features as predictors. To choose the final prediction model we compare the accuracy of each model and pick the one with highest accuracy to use for the test cases.
+
+### Using Random Forest
+
+Instead of working with CART algorithms (`rpart`), that are simple to interpret, decided to use random forests algorithm as these normally outperform the performance of decision trees. The random forest method achieves this by inherently using bagging i.e. bootstrap aggregating.
+
+```{r message=FALSE, echo=TRUE, cache=TRUE}
+
+# Set trainControl - cross-validation + 5-Fold
+trControl <- trainControl(method = "cv", number = 5)
+
+# Train the model
+modFit_rf <- 
+  train(classe ~ ., method = "rf", data = training, trainControl = trControl)
+
+```
+
+### Using Boosting
+
+Reason for picking a boosting algorithm for building our model was that it controls both bias and variance, this is better than bagging algorithms that only control for high variance. 
+
+```{r message=FALSE, echo=TRUE, cache=TRUE}
+
+# Train the model
+modFit_gbm <- 
+  train(classe ~ ., method = "gbm", data = training, verbose = FALSE)
+
+```
+
+## Assessing the Prediction Model
+
+We assess our prediction models by applying it to cross-validation test set that we had created earlier. We then utilize the confusion Matrix to check the accuracy of the fit of each model and select the model for prediction on the 20 test cases.
+
+```{r message=FALSE, echo=TRUE, results='asis'}
+
+# Assess the model
+#rf
+predict_rf <- predict(modFit_rf, newdata = testing)
+# Utilize confusion matrix to check the Accuracy
+cm_rf <- confusionMatrix(predict_rf, testing$classe)
+
+#gbm
+predict_gbm <- predict(modFit_gbm, newdata = testing)
+# Utilize confusion matrix to check the Accuracy
+cm_gbm <- confusionMatrix(predict_gbm, testing$classe)
+
+# Out of sample error rate estimate
+ooSampleError <- function(prediction, values) { sum(prediction == values)/length(prediction) }
+
+ooSampleError_rf <- 
+  paste0(sprintf("%.2f", (1 - ooSampleError(predict_rf, testing$classe)) * 100), "%")
+ooSampleError_gbm <- 
+  paste0(sprintf("%.2f", (1 - ooSampleError(predict_gbm, testing$classe)) * 100), "%")
+
+# Compare the accuracy of the two models
+html_table_width <- function(kable_output, width){
+  width_html <- paste0(paste0('<col width="', width, '">'), collapse = "\n")
+  sub("<table>", paste0("<table>\n", width_html), kable_output)
+}
+
+results_df <- data.frame(Model = c("RF", "GBM"), 
+                Accuracy = c(cm_rf$overall[1], cm_gbm$overall[1]),
+                Error = c(ooSampleError_rf, ooSampleError_gbm))
+
+kable(results_df, format = "html", digits = 4, align = c("l", "c", "c")) %>%
+  html_table_width(c(75,100,100))
+
+```
+
+On comparison of the accuracy of the two models we find that the random forest model has the best accuracy of `r cm_rf$overall["Accuracy"]`. Out of sample error is the error rate you get on a new data-set, also known as generalization error. In our case it is the error rate of predictions on the testing data-set, see the table above to see the out of sample error rate for each model. In terms of this error too random forest model with error of `r ooSampleError_rf` performs much better.
+
+```{r message=FALSE, echo=TRUE}
+
+# Best fit model: Random Forest
+print(cm_rf, digits = 4)
+
+# Best fit model: Random Forest Visualization Sensitivity and Specificity
+df <- data.frame(x = cm_rf$byClass[,1], y = cm_rf$byClass[,2], z = LETTERS[1:5])
+ggplot(data = df, aes(x = x, y = y, label = z)) + theme_bw() + 
+    geom_point(shape = 1, colour = "green", size = 5) + 
+    geom_text(data = within(df, c(y, x )), hjust = 0, vjust = 0) +
+    xlab("Sensitivity") + ylab("Specificity") +
+    xlim(c(0.98, 1.00))
+
+
+```
+
+# Applying the Selected Model
+
+We now apply the random forest model, that performed the best, to predict the 20 test cases. 
+
+```{r message=FALSE, echo=TRUE}
+
+predict_test <- predict(modFit_rf, newdata=dfTestingData)
+print(predict_test)
+
+```
+
+# References
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. [Qualitative Activity Recognition of Weight Lifting Exercises](http://groupware.les.inf.puc-rio.br/work.jsf?p1=11201). Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013
